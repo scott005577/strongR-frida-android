@@ -83,10 +83,23 @@ jobs:
           sudo gem install fpm -v 1.11.0 --no-document
           pip install lief graphlib
 
+      - name: Setup Android NDK r25b
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25b
+
+
       - name: Build Frida for Android
         run: |
+          export ANDROID_NDK_ROOT="${{ steps.ndk.outputs.ndk-path }}"
+          export ANDROID_NDK_HOME="$ANDROID_NDK_ROOT"
+          export PATH="$ANDROID_NDK_ROOT:$PATH"
+
+          echo "Using NDK at: $ANDROID_NDK_ROOT"
+          ls $ANDROID_NDK_ROOT
+
           git clone --recurse-submodules https://github.com/frida/frida
-          export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
 
           for arch in android-arm android-arm64 android-x86 android-x86_64; do
             mkdir build-$arch
