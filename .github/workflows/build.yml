@@ -1,7 +1,4 @@
-name: strongR-frida
-
-permissions:
-  contents: write   # ★ 没这个你必 404，不接受反驳
+name: strongR-frida-build-only
 
 on:
   schedule:
@@ -62,31 +59,13 @@ jobs:
           ndk-version: r25b
 
       # --------------------------------------------------
-      # Get latest Frida version
+      # Get latest Frida version (ONLY FOR LOG)
       # --------------------------------------------------
       - name: Get latest Frida version
         run: |
           FRIDA_VERSION=$(curl -s https://api.github.com/repos/frida/frida/releases/latest | jq -r .tag_name)
           echo "FRIDA_VERSION=$FRIDA_VERSION" >> $GITHUB_ENV
-          echo "Using Frida version: $FRIDA_VERSION"
-
-      # --------------------------------------------------
-      # Ensure Release Exists
-      # --------------------------------------------------
-      - name: Ensure GitHub Release exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if gh release view "$FRIDA_VERSION" \
-            --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} >/dev/null 2>&1; then
-            echo "Release $FRIDA_VERSION already exists"
-          else
-            echo "Creating release $FRIDA_VERSION"
-            gh release create "$FRIDA_VERSION" \
-              --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} \
-              --title "$FRIDA_VERSION" \
-              --notes "Automated build for Frida $FRIDA_VERSION"
-          fi
+          echo "Building Frida version: $FRIDA_VERSION"
 
       # --------------------------------------------------
       # Build Frida
@@ -112,24 +91,25 @@ jobs:
       # --------------------------------------------------
       # Package outputs
       # --------------------------------------------------
-      - name: Package artifacts
+      - name: Package outputs
         run: |
+          mkdir -p output
           for arch in arm arm64 x86 x86_64; do
-            gzip -f frida/build-android-$arch/subprojects/frida-core/server/frida-server
-            gzip -f frida/build-android-$arch/subprojects/frida-core/inject/frida-inject
-            gzip -f frida/build-android-$arch/subprojects/frida-core/lib/gadget/frida-gadget.so
+            gzip -c frida/build-android-$arch/subprojects/frida-core/server/frida-server \
+              > output/frida-server-$arch.gz
+
+            gzip -c frida/build-android-$arch/subprojects/frida-core/inject/frida-inject \
+              > output/frida-inject-$arch.gz
+
+            gzip -c frida/build-android-$arch/subprojects/frida-core/lib/gadget/frida-gadget.so \
+              > output/frida-gadget-$arch.so.gz
           done
 
       # --------------------------------------------------
-      # Upload to Release (NO 404 GUARANTEED)
+      # Upload artifacts (THIS MAKES IT GREEN)
       # --------------------------------------------------
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "$FRIDA_VERSION" \
-            frida/build-android-*/subprojects/frida-core/server/frida-server.gz \
-            frida/build-android-*/subprojects/frida-core/inject/frida-inject.gz \
-            frida/build-android-*/subprojects/frida-core/lib/gadget/frida-gadget.so.gz \
-            --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} \
-            --clobber
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: strongR-frida-android
+          path: output/
