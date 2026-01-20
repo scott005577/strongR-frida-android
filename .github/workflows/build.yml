@@ -32,6 +32,7 @@ jobs:
             echo "exists=0" >> $GITHUB_OUTPUT
           fi
 
+
   create_release:
     needs: check_version
     runs-on: ubuntu-22.04
@@ -48,8 +49,11 @@ jobs:
             --title "${{ needs.check_version.outputs.FRIDA_VERSION }}" \
             --notes "Automated build for Frida ${{ needs.check_version.outputs.FRIDA_VERSION }}"
 
+
   android_build:
-    needs: check_version
+    needs:
+      - check_version
+      - create_release
     runs-on: ubuntu-22.04
 
     steps:
@@ -64,7 +68,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: nttld/setup-ndk@v1
+      - name: Setup Android NDK r25b
+        id: ndk
+        uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25b
 
@@ -72,7 +78,7 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -83,12 +89,9 @@ jobs:
           sudo gem install fpm -v 1.11.0 --no-document
           pip install lief graphlib
 
-      - name: Setup Android NDK r25b
-        id: ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r25b
-
+      - name: Clone Frida
+        run: |
+          git clone --recurse-submodules https://github.com/frida/frida.git
 
       - name: Build Frida for Android
         run: |
@@ -97,11 +100,9 @@ jobs:
           export PATH="$ANDROID_NDK_ROOT:$PATH"
 
           echo "Using NDK at: $ANDROID_NDK_ROOT"
-          ls $ANDROID_NDK_ROOT
-
-          git clone --recurse-submodules https://github.com/frida/frida
 
           for arch in android-arm android-arm64 android-x86 android-x86_64; do
+            echo "=== Building $arch ==="
             mkdir build-$arch
             cd build-$arch
             ../frida/configure --host=$arch
@@ -111,10 +112,10 @@ jobs:
 
       - name: Package outputs
         run: |
-          for arch in arm arm64 x86 x86_64; do
-            gzip build-android-$arch/subprojects/frida-core/server/frida-server
-            gzip build-android-$arch/subprojects/frida-core/inject/frida-inject
-            gzip build-android-$arch/subprojects/frida-core/lib/gadget/frida-gadget.so
+          for arch in android-arm android-arm64 android-x86 android-x86_64; do
+            gzip build-$arch/subprojects/frida-core/server/frida-server
+            gzip build-$arch/subprojects/frida-core/inject/frida-inject
+            gzip build-$arch/subprojects/frida-core/lib/gadget/frida-gadget.so
           done
 
       - name: Upload to release
