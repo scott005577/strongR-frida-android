@@ -1,4 +1,4 @@
-name: build-hluda-17.6.0-final-fix
+name: build-hluda-17.6.0-final-fix-v2
 
 on:
   workflow_dispatch:
@@ -35,18 +35,15 @@ jobs:
       - name: Build HLuda 17.6.0
         shell: bash
         run: |
-          # 1. 明确 NDK 位置 (GitHub Actions 22.04 预装路径)
+          # 1. 强制指定 NDK 25b 路径 (GitHub 官方镜像路径)
           export ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653
+          export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           
-          # 2. 克隆 Frida 17.6.0
+          # 2. 克隆 Frida 17.6.0 源码
           git clone --depth 1 --branch 17.6.0 --recurse-submodules https://github.com/frida/frida
           cd frida
           
-          # 3. 【核心修复】修改 releng 逻辑，禁止它联网下载 toolchain
-          # 强制它认为工具链已经存在
-          sed -i 's/missing_toolchain = True/missing_toolchain = False/g' releng/setup-env.sh 2>/dev/null || true
-          
-          # 4. 深度特征抹除
+          # 3. 深度特征抹除
           echo "Applying Deep Feature Erasure..."
           find . -type f -not -path '*/.*' -exec sed -i 's/frida/hluda/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/Frida/Hluda/g' {} +
@@ -54,21 +51,17 @@ jobs:
           find . -type f -not -path '*/.*' -exec sed -i 's/re.frida.server/re.hluda.server/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/frida-helper/hluda-helper/g' {} +
           
-          # 5. 配置编译链环境变量
-          export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-          
-          # 6. 编译 x86_64
+          # 4. 编译 x86_64 (使用最新参数 --without-prebuilds toolchain)
           echo "--- Building android-x86_64 ---"
-          # 使用 --no-fetch 彻底封锁联网行为
-          ./configure --host=android-x86_64 --no-fetch
+          ./configure --host=android-x86_64 --without-prebuilds toolchain
           make
           cp subprojects/frida-core/server/frida-server ../hluda-server-x86_64
           gzip ../hluda-server-x86_64
           
-          # 7. 编译 arm64
+          # 5. 编译 arm64
           echo "--- Building android-arm64 ---"
           make clean
-          ./configure --host=android-arm64 --no-fetch
+          ./configure --host=android-arm64 --without-prebuilds toolchain
           make
           cp subprojects/frida-core/server/frida-server ../hluda-server-arm64
           gzip ../hluda-server-arm64
