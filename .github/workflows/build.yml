@@ -1,4 +1,4 @@
-name: build-hluda-17.6.0-stable
+name: build-hluda-17.6.0-no-download
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "hluda-17.6.0-${{ steps.tag.outputs.val }}"
-          release_name: "HLuda-17.6.0-Build"
+          release_name: "HLuda-17.6.0-Final-Build"
           prerelease: false
 
       - name: Install Build Essentials
@@ -36,18 +36,15 @@ jobs:
       - name: Build HLuda 17.6.0
         shell: bash
         run: |
-          # 使用系统预装的 NDK，避免下载错误 (r25b 通常在 /usr/local/lib/android/sdk/ndk 下)
-          export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk-bundle
-          if [ ! -d "$ANDROID_NDK_ROOT" ]; then
-            export ANDROID_NDK_ROOT=$(ls -d $ANDROID_HOME/ndk/* | tail -1)
-          fi
+          # 1. 强制指定系统自带 NDK 25b 路径 (GitHub 预装最稳的版本)
+          export ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653
           echo "Using NDK at: $ANDROID_NDK_ROOT"
           
-          # 克隆 Frida 17.6.0
+          # 2. 克隆 Frida 17.6.0
           git clone --depth 1 --branch 17.6.0 --recurse-submodules https://github.com/frida/frida
           cd frida
           
-          # 深度特征抹除 (针对 17.6.0 核心)
+          # 3. 深度特征抹除
           echo "Applying Deep Feature Erasure..."
           find . -type f -not -path '*/.*' -exec sed -i 's/frida/hluda/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/Frida/Hluda/g' {} +
@@ -55,14 +52,19 @@ jobs:
           find . -type f -not -path '*/.*' -exec sed -i 's/re.frida.server/re.hluda.server/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/frida-helper/hluda-helper/g' {} +
           
-          # 编译模拟器 x86_64
+          # 4. 重点：配置环境变量，拦截 Toolchain 下载
+          # 我们直接告诉编译器在哪里，阻止它去下载
+          export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          
+          # 5. 编译模拟器 x86_64
           echo "--- Building android-x86_64 ---"
+          # 使用 --no-fetch 或直接运行 configure，强制使用本地工具
           ./configure --host=android-x86_64
           make
           cp subprojects/frida-core/server/frida-server ../hluda-server-x86_64
           gzip ../hluda-server-x86_64
           
-          # 编译真机 arm64
+          # 6. 编译真机 arm64
           echo "--- Building android-arm64 ---"
           make clean
           ./configure --host=android-arm64
@@ -78,14 +80,4 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./hluda-server-x86_64.gz
           asset_name: hluda-server-17.6.0-android-x86_64.gz
-          asset_content_type: application/octet-stream
-
-      - name: Upload Asset Arm64
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./hluda-server-arm64.gz
-          asset_name: hluda-server-17.6.0-android-arm64.gz
           asset_content_type: application/octet-stream
