@@ -1,4 +1,4 @@
-name: build-hluda-17.6.0-offline-fix
+name: build-hluda-17.6.0-path-fixed
 
 on:
   workflow_dispatch:
@@ -24,28 +24,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: "hluda-17.6.0-${{ steps.tag.outputs.val }}"
-          release_name: "HLuda-17.6.0-Offline-Build"
+          release_name: "HLuda-17.6.0-Native-Build"
           prerelease: false
 
       - name: Install Build Essentials
         run: |
           sudo apt-get update
           sudo apt-get install build-essential ninja-build gcc-multilib g++-multilib flex bison python3-pip libc6-dev-i386 -y
-          # Frida 编译 SDK 可能需要额外的构建工具
           python3 -m pip install meson jinja2
 
       - name: Build HLuda 17.6.0
         shell: bash
         run: |
-          # 1. 强制绑定 GitHub Actions 预装的 NDK 25b
-          export ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653
-          export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          # 1. 动态定位 NDK r25 路径并强制导出所有相关变量
+          # GitHub 预装 NDK 25.x 的位置通常在 /usr/local/lib/android/sdk/ndk/
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/25.* | head -n 1)
+          if [ -z "$NDK_PATH" ]; then
+            echo "NDK r25 not found, searching alternative locations..."
+            NDK_PATH=$(ls -d /usr/local/lib/android/sdk/ndk/25.* | head -n 1)
+          fi
+          
+          echo "Final NDK Path: $NDK_PATH"
+          export ANDROID_NDK_ROOT=$NDK_PATH
+          export ANDROID_NDK_HOME=$NDK_PATH
+          export NDK=$NDK_PATH
+          export PATH=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           
           # 2. 克隆 Frida 源码
           git clone --depth 1 --branch 17.6.0 --recurse-submodules https://github.com/frida/frida
           cd frida
           
-          # 3. 深度特征抹除 (360/学习通检测点)
+          # 3. 深度特征抹除
           echo "Applying Deep Feature Erasure..."
           find . -type f -not -path '*/.*' -exec sed -i 's/frida/hluda/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/Frida/Hluda/g' {} +
@@ -53,22 +62,22 @@ jobs:
           find . -type f -not -path '*/.*' -exec sed -i 's/re.frida.server/re.hluda.server/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/frida-helper/hluda-helper/g' {} +
           
-          # 4. 【关键改动】禁止一切预编译包下载 (Toolchain + SDK)
-          # 这会强制 Frida 在本地从头编译所有依赖，虽然慢，但网络报错不会再出现
-          echo "--- Building android-x86_64 (Full Native Build) ---"
+          # 4. 编译 x86_64 (完全原生编译，无视网络下载)
+          echo "--- Building android-x86_64 ---"
           ./configure --host=android-x86_64 --without-prebuilds toolchain,sdk
           make
           cp subprojects/frida-core/server/frida-server ../hluda-server-x86_64
           gzip ../hluda-server-x86_64
           
-          echo "--- Building android-arm64 (Full Native Build) ---"
+          # 5. 编译 arm64
+          echo "--- Building android-arm64 ---"
           make clean
           ./configure --host=android-arm64 --without-prebuilds toolchain,sdk
           make
           cp subprojects/frida-core/server/frida-server ../hluda-server-arm64
           gzip ../hluda-server-arm64
 
-      - name: Upload x86_64
+      - name: Upload x86_64 Asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -76,4 +85,14 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./hluda-server-x86_64.gz
           asset_name: hluda-server-17.6.0-android-x86_64.gz
+          asset_content_type: application/octet-stream
+
+      - name: Upload arm64 Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./hluda-server-arm64.gz
+          asset_name: hluda-server-17.6.0-android-arm64.gz
           asset_content_type: application/octet-stream
