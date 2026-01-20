@@ -6,58 +6,24 @@ on:
   workflow_dispatch:
 
 jobs:
-  check_version:
-    runs-on: ubuntu-22.04
-    outputs:
-      FRIDA_VERSION: ${{ steps.frida.outputs.version }}
-      ALREADY_RELEASE: ${{ steps.check.outputs.exists }}
-
-    steps:
-      - name: Get latest Frida version
-        id: frida
-        run: |
-          ver=$(curl -s https://api.github.com/repos/frida/frida/releases/latest | jq -r .tag_name)
-          echo "version=$ver" >> $GITHUB_OUTPUT
-
-      - name: Check if release exists
-        id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          gh api repos/${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }}/releases/tags/${{ steps.frida.outputs.version }} >/dev/null 2>&1
-          if [ $? -eq 0 ]; then
-            echo "exists=1" >> $GITHUB_OUTPUT
-          else
-            echo "exists=0" >> $GITHUB_OUTPUT
-          fi
-
-
-  create_release:
-    needs: check_version
-    runs-on: ubuntu-22.04
-    if: needs.check_version.outputs.ALREADY_RELEASE == '0'
-
-    steps:
-      - name: Create release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create \
-            "${{ needs.check_version.outputs.FRIDA_VERSION }}" \
-            --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} \
-            --title "${{ needs.check_version.outputs.FRIDA_VERSION }}" \
-            --notes "Automated build for Frida ${{ needs.check_version.outputs.FRIDA_VERSION }}"
-
-
-  android_build:
-    needs:
-      - check_version
-      - create_release
+  build-android:
     runs-on: ubuntu-22.04
 
     steps:
+      # --------------------------------------------------
+      # 基础环境
+      # --------------------------------------------------
       - uses: actions/checkout@v4
+
+      - name: Install base tools
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            build-essential ninja-build \
+            gcc-multilib g++-multilib \
+            libc6-dev libc6-dev-i386 \
+            flex bison ruby ruby-dev \
+            jq curl git
 
       - uses: actions/setup-node@v4
         with:
@@ -68,64 +34,98 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install Python / Ruby deps
+        run: |
+          pip install lief graphlib
+          sudo gem install fpm -v 1.11.0 --no-document
+
+      # --------------------------------------------------
+      # Android NDK（锁死 r25b）
+      # --------------------------------------------------
       - name: Setup Android NDK r25b
         id: ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25b
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-
-      - name: Install build dependencies
+      # --------------------------------------------------
+      # 获取 Frida 最新版本
+      # --------------------------------------------------
+      - name: Get latest Frida version
+        id: frida
         run: |
-          sudo apt update
-          sudo apt install -y \
-            build-essential ninja-build \
-            gcc-multilib g++-multilib \
-            libc6-dev libc6-dev-i386 \
-            flex bison ruby ruby-dev jq
-          sudo gem install fpm -v 1.11.0 --no-document
-          pip install lief graphlib
+          ver=$(curl -s https://api.github.com/repos/frida/frida/releases/latest | jq -r .tag_name)
+          echo "FRIDA_VERSION=$ver" >> $GITHUB_ENV
+          echo "Using Frida version: $ver"
 
-      - name: Clone Frida
+      # --------------------------------------------------
+      # 确保 Release 存在（不存在就创建）
+      # --------------------------------------------------
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git clone --recurse-submodules https://github.com/frida/frida.git
+          set -e
+          if gh release view "$FRIDA_VERSION" \
+            --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} >/dev/null 2>&1; then
+            echo "Release $FRIDA_VERSION already exists"
+          else
+            echo "Creating release $FRIDA_VERSION"
+            gh release create "$FRIDA_VERSION" \
+              --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} \
+              --title "$FRIDA_VERSION" \
+              --notes "Automated build for Frida $FRIDA_VERSION"
+          fi
 
+      # --------------------------------------------------
+      # 构建 Frida（Android 全架构）
+      # --------------------------------------------------
       - name: Build Frida for Android
         run: |
           export ANDROID_NDK_ROOT="${{ steps.ndk.outputs.ndk-path }}"
           export ANDROID_NDK_HOME="$ANDROID_NDK_ROOT"
           export PATH="$ANDROID_NDK_ROOT:$PATH"
 
-          echo "Using NDK at: $ANDROID_NDK_ROOT"
+          echo "Using NDK: $ANDROID_NDK_ROOT"
 
-          for arch in android-arm android-arm64 android-x86 android-x86_64; do
-            echo "=== Building $arch ==="
+          git clone --recurse-submodules https://github.com/frida/frida
+          cd frida
+
+          ARCHES="android-arm android-arm64 android-x86 android-x86_64"
+          for arch in $ARCHES; do
+            echo "==== Building $arch ===="
             mkdir build-$arch
             cd build-$arch
-            ../frida/configure --host=$arch
+            ../configure --host=$arch
             make -j$(nproc)
             cd ..
           done
 
+      # --------------------------------------------------
+      # 打包产物
+      # --------------------------------------------------
       - name: Package outputs
         run: |
-          for arch in android-arm android-arm64 android-x86 android-x86_64; do
-            gzip build-$arch/subprojects/frida-core/server/frida-server
-            gzip build-$arch/subprojects/frida-core/inject/frida-inject
-            gzip build-$arch/subprojects/frida-core/lib/gadget/frida-gadget.so
+          for arch in arm arm64 x86 x86_64; do
+            gzip -f frida/build-android-$arch/subprojects/frida-core/server/frida-server
+            gzip -f frida/build-android-$arch/subprojects/frida-core/inject/frida-inject
+            gzip -f frida/build-android-$arch/subprojects/frida-core/lib/gadget/frida-gadget.so
           done
 
-      - name: Upload to release
+      # --------------------------------------------------
+      # 上传到 Release（永不 404，永不 skipped）
+      # --------------------------------------------------
+      - name: Upload artifacts to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload \
-            "${{ needs.check_version.outputs.FRIDA_VERSION }}" \
-            build-android-*/subprojects/frida-core/server/frida-server.gz \
-            build-android-*/subprojects/frida-core/inject/frida-inject.gz \
-            build-android-*/subprojects/frida-core/lib/gadget/frida-gadget.so.gz \
+          gh release upload "$FRIDA_VERSION" \
+            frida/build-android-*/subprojects/frida-core/server/frida-server.gz \
+            frida/build-android-*/subprojects/frida-core/inject/frida-inject.gz \
+            frida/build-android-*/subprojects/frida-core/lib/gadget/frida-gadget.so.gz \
             --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} \
             --clobber
