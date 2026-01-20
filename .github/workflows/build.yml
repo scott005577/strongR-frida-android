@@ -1,4 +1,4 @@
-name: build-hluda-17.6.0-final
+name: build-hluda-17.6.0-stable
 
 on:
   workflow_dispatch:
@@ -23,15 +23,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: "hluda-v17.6.0-${{ steps.tag.outputs.val }}"
-          release_name: "HLuda-17.6.0-Custom-Build"
+          tag_name: "hluda-17.6.0-${{ steps.tag.outputs.val }}"
+          release_name: "HLuda-17.6.0-Build"
           prerelease: false
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1.2.0
-        with:
-          ndk-version: r25b
-          add-to-path: true
 
       - name: Install Build Essentials
         run: |
@@ -42,38 +36,41 @@ jobs:
       - name: Build HLuda 17.6.0
         shell: bash
         run: |
-          export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
+          # 使用系统预装的 NDK，避免下载错误 (r25b 通常在 /usr/local/lib/android/sdk/ndk 下)
+          export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk-bundle
+          if [ ! -d "$ANDROID_NDK_ROOT" ]; then
+            export ANDROID_NDK_ROOT=$(ls -d $ANDROID_HOME/ndk/* | tail -1)
+          fi
+          echo "Using NDK at: $ANDROID_NDK_ROOT"
           
-          # 1. 直接拉取 17.6.0 源码 (如果该版本不存在则拉取最新 main)
-          git clone --depth 1 --branch 17.6.0 --recurse-submodules https://github.com/frida/frida || git clone --depth 1 --recurse-submodules https://github.com/frida/frida
+          # 克隆 Frida 17.6.0
+          git clone --depth 1 --branch 17.6.0 --recurse-submodules https://github.com/frida/frida
           cd frida
           
-          # 2. 【重头戏】针对 17.x 版本的深度特征抹除
-          # 抹除 frida 核心特征，躲避 360 扫描
-          echo "Applying 17.6.0 Deep Feature Erasure..."
+          # 深度特征抹除 (针对 17.6.0 核心)
+          echo "Applying Deep Feature Erasure..."
           find . -type f -not -path '*/.*' -exec sed -i 's/frida/hluda/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/Frida/Hluda/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/gum-js-loop/gum-hl-loop/g' {} +
           find . -type f -not -path '*/.*' -exec sed -i 's/re.frida.server/re.hluda.server/g' {} +
-          # 针对 17.x 特有的线程名混淆
           find . -type f -not -path '*/.*' -exec sed -i 's/frida-helper/hluda-helper/g' {} +
           
-          # 3. 编译 x86_64 (模拟器专用)
-          echo "--- Starting build for android-x86_64 ---"
+          # 编译模拟器 x86_64
+          echo "--- Building android-x86_64 ---"
           ./configure --host=android-x86_64
           make
           cp subprojects/frida-core/server/frida-server ../hluda-server-x86_64
           gzip ../hluda-server-x86_64
           
-          # 4. 编译 arm64 (主流手机专用)
-          echo "--- Starting build for android-arm64 ---"
+          # 编译真机 arm64
+          echo "--- Building android-arm64 ---"
           make clean
           ./configure --host=android-arm64
           make
           cp subprojects/frida-core/server/frida-server ../hluda-server-arm64
           gzip ../hluda-server-arm64
 
-      - name: Upload x86_64 Asset
+      - name: Upload Assets
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -83,7 +80,7 @@ jobs:
           asset_name: hluda-server-17.6.0-android-x86_64.gz
           asset_content_type: application/octet-stream
 
-      - name: Upload arm64 Asset
+      - name: Upload Asset Arm64
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
