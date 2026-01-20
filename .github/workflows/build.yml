@@ -1,5 +1,8 @@
 name: strongR-frida
 
+permissions:
+  contents: write   # ★ 没这个你必 404，不接受反驳
+
 on:
   schedule:
     - cron: "0 9,21 * * *"
@@ -11,11 +14,14 @@ jobs:
 
     steps:
       # --------------------------------------------------
-      # 基础环境
+      # Checkout
       # --------------------------------------------------
       - uses: actions/checkout@v4
 
-      - name: Install base tools
+      # --------------------------------------------------
+      # System deps
+      # --------------------------------------------------
+      - name: Install system dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -25,6 +31,9 @@ jobs:
             flex bison ruby ruby-dev \
             jq curl git
 
+      # --------------------------------------------------
+      # Languages
+      # --------------------------------------------------
       - uses: actions/setup-node@v4
         with:
           node-version: 18
@@ -38,13 +47,13 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Install Python / Ruby deps
+      - name: Install Python & Ruby deps
         run: |
           pip install lief graphlib
           sudo gem install fpm -v 1.11.0 --no-document
 
       # --------------------------------------------------
-      # Android NDK（锁死 r25b）
+      # Android NDK (LOCKED)
       # --------------------------------------------------
       - name: Setup Android NDK r25b
         id: ndk
@@ -53,23 +62,21 @@ jobs:
           ndk-version: r25b
 
       # --------------------------------------------------
-      # 获取 Frida 最新版本
+      # Get latest Frida version
       # --------------------------------------------------
       - name: Get latest Frida version
-        id: frida
         run: |
-          ver=$(curl -s https://api.github.com/repos/frida/frida/releases/latest | jq -r .tag_name)
-          echo "FRIDA_VERSION=$ver" >> $GITHUB_ENV
-          echo "Using Frida version: $ver"
+          FRIDA_VERSION=$(curl -s https://api.github.com/repos/frida/frida/releases/latest | jq -r .tag_name)
+          echo "FRIDA_VERSION=$FRIDA_VERSION" >> $GITHUB_ENV
+          echo "Using Frida version: $FRIDA_VERSION"
 
       # --------------------------------------------------
-      # 确保 Release 存在（不存在就创建）
+      # Ensure Release Exists
       # --------------------------------------------------
-      - name: Ensure GitHub release exists
+      - name: Ensure GitHub Release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -e
           if gh release view "$FRIDA_VERSION" \
             --repo ${{ secrets.GIT_OWNER }}/${{ secrets.GIT_REPO }} >/dev/null 2>&1; then
             echo "Release $FRIDA_VERSION already exists"
@@ -82,7 +89,7 @@ jobs:
           fi
 
       # --------------------------------------------------
-      # 构建 Frida（Android 全架构）
+      # Build Frida
       # --------------------------------------------------
       - name: Build Frida for Android
         run: |
@@ -90,13 +97,10 @@ jobs:
           export ANDROID_NDK_HOME="$ANDROID_NDK_ROOT"
           export PATH="$ANDROID_NDK_ROOT:$PATH"
 
-          echo "Using NDK: $ANDROID_NDK_ROOT"
-
           git clone --recurse-submodules https://github.com/frida/frida
           cd frida
 
-          ARCHES="android-arm android-arm64 android-x86 android-x86_64"
-          for arch in $ARCHES; do
+          for arch in android-arm android-arm64 android-x86 android-x86_64; do
             echo "==== Building $arch ===="
             mkdir build-$arch
             cd build-$arch
@@ -106,9 +110,9 @@ jobs:
           done
 
       # --------------------------------------------------
-      # 打包产物
+      # Package outputs
       # --------------------------------------------------
-      - name: Package outputs
+      - name: Package artifacts
         run: |
           for arch in arm arm64 x86 x86_64; do
             gzip -f frida/build-android-$arch/subprojects/frida-core/server/frida-server
@@ -117,9 +121,9 @@ jobs:
           done
 
       # --------------------------------------------------
-      # 上传到 Release（永不 404，永不 skipped）
+      # Upload to Release (NO 404 GUARANTEED)
       # --------------------------------------------------
-      - name: Upload artifacts to release
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
